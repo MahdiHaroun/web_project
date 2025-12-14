@@ -1,0 +1,12 @@
+1. Access Control Mistakes
+Access control issues occur when the backend does not properly verify who is allowed to access certain pages or data. Many
+beginners rely only on hiding buttons or links in the frontend. This gives a false sense of security. Attackers can still
+send requests directly to the server.
+Common Mistakes:
+• Missing backend role checks (admin, user).
+• Trusting user input for roles or permissions.
+• Hardcoding sensitive access in frontend code.
+Example:
+A developer creates an admin page /admin and only hides it in the menu. Anyone who types the URL can open it
+
+create a access control vernublities for
