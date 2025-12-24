@@ -6,19 +6,45 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 from database import get_db 
 import models
 from database import engine
+import secrets
 
-#access control vulnerability - Insecure Direct Object Reference - Access Other User Profiles
-
-
-# you can see any user's profile by changing the user_id in the URL without proper authorization checks
+# FIXED: Proper authentication and authorization for profile access
 
 app = FastAPI()
 models.Base.metadata.create_all(bind=engine)
+
+# In-memory session store
+active_sessions = {}
 
 # Pydantic model for login
 class LoginRequest(BaseModel):
     name: str
     password: str
+
+
+def create_session_token(user_id: int) -> str:
+    token = secrets.token_urlsafe(32)
+    active_sessions[token] = user_id
+    return token
+
+
+def get_current_user(session_token: Optional[str] = Cookie(None), db: Session = Depends(get_db)):
+    if not session_token or session_token not in active_sessions:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Not authenticated"
+        )
+    
+    user_id = active_sessions[session_token]
+    user = db.query(models.user).filter(models.user.id == user_id).first()
+    
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid session"
+        )
+    
+    return user
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -29,7 +55,7 @@ async def login_page():
     <head>
         <meta charset="UTF-8">
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title>Login</title>
+        <title>Login - Fixed</title>
         <style>
             body {
                 font-family: Arial, sans-serif;
@@ -87,22 +113,24 @@ async def login_page():
                 display: none;
             }
             .info {
-                background: #e3f2fd;
+                background: #d4edda;
                 padding: 15px;
                 border-radius: 5px;
                 margin-bottom: 20px;
                 font-size: 12px;
-                color: #1976d2;
+                color: #155724;
+                border: 1px solid #c3e6cb;
             }
         </style>
     </head>
     <body>
         <div class="container">
-            <h1>🔐 Login</h1>
+            <h1>🔐 Login (Fixed)</h1>
             <div class="info">
-                <strong>Test Users:</strong><br>
-                • mahdi / password (ID: 1)<br>
-                • omar / password (ID: 2)
+                <strong>✅ Security Fixed:</strong><br>
+                • Authentication required<br>
+                • Users can only view own profile<br>
+                • IDOR vulnerability fixed
             </div>
             <form id="loginForm">
                 <div class="form-group">
@@ -155,7 +183,6 @@ async def login_page():
 
 @app.post("/login")
 async def login(login_req: LoginRequest, response: Response, db: Session = Depends(get_db)):
-    # Check if user exists
     user = db.query(models.user).filter(models.user.name == login_req.name).first()
     
     if not user or user.password != login_req.password:
@@ -164,26 +191,35 @@ async def login(login_req: LoginRequest, response: Response, db: Session = Depen
             detail="Invalid credentials"
         )
     
-    # Store user info in cookies
-    response.set_cookie(key="user_id", value=str(user.id))
-    response.set_cookie(key="username", value=user.name)
+    session_token = create_session_token(user.id)
+    
+    response.set_cookie(
+        key="session_token",
+        value=session_token,
+        httponly=True,
+        secure=False,
+        samesite="lax"
+    )
     
     return {"message": "Login successful", "user_id": user.id, "username": user.name}
 
 
-# VULNERABLE ENDPOINT: No authorization check!
-# Anyone can view any profile by just knowing/guessing the user_id in URL
+# FIXED ENDPOINT: Proper authorization checks!
 @app.get("/profile/{user_id}", response_class=HTMLResponse)
 async def view_profile(
-    user_id: int, 
-    current_user_id: Optional[str] = Cookie(None), 
-    username: Optional[str] = Cookie(None),
+    user_id: int,
+    current_user: models.user = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    # VULNERABILITY: No authentication required - anyone can access any profile!
+    # FIXED: Authentication is required (via get_current_user dependency)
     
-    # VULNERABILITY: No check if current_user_id matches user_id
-    # Anyone can access anyone's profile by changing the URL
+    # FIXED: Check if user is authorized to view this profile
+    # Users can only view their own profile unless they are admin
+    if current_user.id != user_id and not current_user.is_admin:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You can only view your own profile"
+        )
     
     # Get the profile user from database
     profile_user = db.query(models.user).filter(models.user.id == user_id).first()
@@ -194,48 +230,27 @@ async def view_profile(
             detail="User not found"
         )
     
-    # Get current user info if logged in
-    current_user = None
-    if current_user_id:
-        current_user = db.query(models.user).filter(models.user.id == int(current_user_id)).first()
+    is_own_profile = (current_user.id == user_id)
     
-    is_own_profile = current_user_id and (int(current_user_id) == user_id)
-    logged_in_as = f"{username} (User ID: {current_user_id})" if current_user_id else "Not logged in"
-    
-    vulnerability_warning = ""
-    if not current_user_id:
-        vulnerability_warning = f"""
-            <div class="vulnerability-warning">
-                <h3>⚠️ IDOR Vulnerability Exploited!</h3>
-                <p>You are NOT logged in, yet you can view User ID: {user_id}'s profile!</p>
-                <p>This endpoint has NO authentication or authorization checks.</p>
-            </div>
-        """
-    elif not is_own_profile:
-        vulnerability_warning = f"""
-            <div class="vulnerability-warning">
-                <h3>⚠️ IDOR Vulnerability Exploited!</h3>
-                <p>You (User ID: {current_user_id} - {username}) are viewing someone else's profile!</p>
-                <p>You accessed User ID: {user_id} by changing the URL parameter.</p>
-            </div>
-        """
-    
-    exploit_section = ""
+    security_info = ""
     if is_own_profile:
-        exploit_section = """
-            <div class="exploit-section">
-                <h3>🔍 Try This Exploit:</h3>
-                <p>Change the <strong>user_id</strong> in the URL to view other users' profiles!</p>
-                <div class="url-examples">
-                    <p><strong>Try these URLs:</strong></p>
-                    <a href="/profile/1" class="exploit-link">View User ID: 1 (mahdi's profile)</a><br>
-                    <a href="/profile/2" class="exploit-link">View User ID: 2 (omar's profile)</a>
-                </div>
-                <pre style="text-align: left; background: #2d2d2d; color: #f8f8f2; padding: 15px; border-radius: 5px; margin-top: 15px;">
-# You can also try with curl:
-curl http://localhost:8000/profile/1 \\
-  --cookie "user_id=2; username=omar"
-                </pre>
+        security_info = """
+            <div class="security-info">
+                <h3>✅ Security Fixed</h3>
+                <p>The profile endpoint now requires:</p>
+                <ul style="text-align: left; display: inline-block;">
+                    <li>User must be authenticated</li>
+                    <li>Users can only view their own profile</li>
+                    <li>Admins can view any profile</li>
+                    <li>Trying to access another profile will be blocked</li>
+                </ul>
+                <p style="margin-top: 10px;">Try changing the URL to /profile/1 or /profile/2 - you'll get access denied!</p>
+            </div>
+        """
+    else:
+        security_info = f"""
+            <div class="admin-viewing">
+                <p>👑 You are viewing this profile as an administrator</p>
             </div>
         """
     
@@ -249,7 +264,7 @@ curl http://localhost:8000/profile/1 \\
     <head>
         <meta charset="UTF-8">
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title>User Profile</title>
+        <title>User Profile - Fixed</title>
         <style>
             body {{
                 font-family: Arial, sans-serif;
@@ -274,7 +289,7 @@ curl http://localhost:8000/profile/1 \\
                 margin: 0 0 20px 0;
             }}
             h3 {{
-                color: #dc3545;
+                color: #28a745;
             }}
             .profile-info {{
                 background: #f5f5f5;
@@ -293,34 +308,19 @@ curl http://localhost:8000/profile/1 \\
             .profile-field strong {{
                 color: #666;
             }}
-            .vulnerability-warning {{
-                background: #f8d7da;
+            .security-info {{
+                background: #d4edda;
                 padding: 20px;
                 border-radius: 5px;
                 margin: 20px 0;
-                border: 2px solid #dc3545;
+                border: 2px solid #28a745;
             }}
-            .exploit-section {{
+            .admin-viewing {{
                 background: #fff3cd;
-                padding: 20px;
+                padding: 15px;
                 border-radius: 5px;
                 margin: 20px 0;
-                border: 2px solid #ffc107;
-            }}
-            .url-examples {{
-                margin: 15px 0;
-            }}
-            .exploit-link {{
-                display: inline-block;
-                margin: 5px;
-                padding: 10px 20px;
-                background: #dc3545;
-                color: white;
-                text-decoration: none;
-                border-radius: 5px;
-            }}
-            .exploit-link:hover {{
-                background: #c82333;
+                border: 1px solid #ffc107;
             }}
             .current-user {{
                 background: #e3f2fd;
@@ -341,12 +341,12 @@ curl http://localhost:8000/profile/1 \\
     <body>
         <div class="container">
             <div class="current-user">
-                <strong>Status:</strong> {logged_in_as}
+                <strong>Logged in as:</strong> {current_user.name} (User ID: {current_user.id})
             </div>
             
             <h1>👤 User Profile</h1>
             
-            {vulnerability_warning}
+            {security_info}
             
             <div class="profile-info">
                 <h2>{profile_user.name}'s Profile {admin_badge}</h2>
@@ -359,12 +359,10 @@ curl http://localhost:8000/profile/1 \\
                 <div class="profile-field">
                     <strong>Admin Status:</strong> {profile_user.is_admin}
                 </div>
-                <div class="profile-field" style="background: #fff3cd; padding: 10px; border-radius: 5px; margin-top: 15px;">
-                    <strong>🔒 Sensitive Info:</strong> This profile contains private data that should only be visible to the profile owner!
+                <div class="profile-field" style="background: #d4edda; padding: 10px; border-radius: 5px; margin-top: 15px; border: 1px solid #c3e6cb;">
+                    <strong>🔒 Sensitive Info Protected:</strong> Only authorized users can view this profile!
                 </div>
             </div>
-            
-            {exploit_section}
             
             <div class="logout">
                 <a href="/logout">Logout</a>
@@ -377,10 +375,12 @@ curl http://localhost:8000/profile/1 \\
 
 
 @app.get("/logout")
-async def logout(response: Response):
+async def logout(response: Response, session_token: Optional[str] = Cookie(None)):
+    if session_token and session_token in active_sessions:
+        del active_sessions[session_token]
+    
     response = RedirectResponse(url="/")
-    response.delete_cookie("user_id")
-    response.delete_cookie("username")
+    response.delete_cookie("session_token")
     return response
 
 

@@ -7,7 +7,11 @@ from database import get_db
 import models
 from database import engine
 
-#access control vulnerability - Insecure Direct Object Reference (IDOR)
+#access control vulnerability - Insecure Direct Object Reference 
+# VULNERABLE ENDPOINT: No authorization check!
+# Any user can update any user's admin status to make themselves admin 
+
+
 
 app = FastAPI()
 models.Base.metadata.create_all(bind=engine)
@@ -486,6 +490,8 @@ async def admin_panel(user_id: Optional[str] = Cookie(None), username: Optional[
         </html>
         """
     )
+
+
 
 
 if __name__ == "__main__":

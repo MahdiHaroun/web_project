@@ -1,24 +1,57 @@
-from fastapi import FastAPI , HTTPException , status , Depends , Response , Cookie , Request
+from fastapi import FastAPI , HTTPException , status , Depends , Response , Cookie
 from pydantic import BaseModel
 from typing import List, Optional
 from sqlalchemy.orm import Session
-from jinja2 import Environment , FileSystemLoader
 from fastapi.responses import HTMLResponse, RedirectResponse
 from database import get_db 
 import models
 from database import engine
+import secrets
 
-#access control vernublities 
+# FIXED: Proper authorization checks for user updates 
+# it checks who is the user making the request and only allows admins to modify other users' admin status
 
-# user can manipulate cookies to gain admin access by changing is_admin cookie value 
+
 
 app = FastAPI()
 models.Base.metadata.create_all(bind=engine)
 
-# Pydantic model for login
+# In-memory session store
+active_sessions = {}
+
+# Pydantic models
 class LoginRequest(BaseModel):
     name: str
     password: str
+
+class UpdateUserRequest(BaseModel):
+    user_id: int
+    is_admin: bool
+
+
+def create_session_token(user_id: int) -> str:
+    token = secrets.token_urlsafe(32)
+    active_sessions[token] = user_id
+    return token
+
+
+def get_current_user(session_token: Optional[str] = Cookie(None), db: Session = Depends(get_db)):
+    if not session_token or session_token not in active_sessions:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Not authenticated"
+        )
+    
+    user_id = active_sessions[session_token]
+    user = db.query(models.user).filter(models.user.id == user_id).first()
+    
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid session"
+        )
+    
+    return user
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -29,7 +62,7 @@ async def login_page():
     <head>
         <meta charset="UTF-8">
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title>Login</title>
+        <title>Login - Fixed</title>
         <style>
             body {
                 font-family: Arial, sans-serif;
@@ -87,22 +120,24 @@ async def login_page():
                 display: none;
             }
             .info {
-                background: #e3f2fd;
+                background: #d4edda;
                 padding: 15px;
                 border-radius: 5px;
                 margin-bottom: 20px;
                 font-size: 12px;
-                color: #1976d2;
+                color: #155724;
+                border: 1px solid #c3e6cb;
             }
         </style>
     </head>
     <body>
         <div class="container">
-            <h1>🔐 Login</h1>
+            <h1>🔐 Login (Fixed)</h1>
             <div class="info">
-                <strong>Test Users:</strong><br>
-                • mahdi / password (admin)<br>
-                • omar / password (user)
+                <strong>✅ Security Fixed:</strong><br>
+                • Authorization checks in place<br>
+                • Only admins can modify users<br>
+                • Users cannot escalate privileges
             </div>
             <form id="loginForm">
                 <div class="form-group">
@@ -154,7 +189,6 @@ async def login_page():
 
 @app.post("/login")
 async def login(login_req: LoginRequest, response: Response, db: Session = Depends(get_db)):
-    # Check if user exists
     user = db.query(models.user).filter(models.user.name == login_req.name).first()
     
     if not user or user.password != login_req.password:
@@ -163,30 +197,38 @@ async def login(login_req: LoginRequest, response: Response, db: Session = Depen
             detail="Invalid credentials"
         )
     
-    # VULNERABLE: Setting admin status in cookie (can be manipulated by user)
+    session_token = create_session_token(user.id)
+    
     response.set_cookie(
-        key="username",
-        value=user.name,
-        httponly=False  # VULNERABLE: Allows JavaScript access
-    )
-    response.set_cookie(
-        key="is_admin",
-        value=str(user.is_admin),  # VULNERABLE: Storing as plain text "True" or "False"
-        httponly=False  # VULNERABLE: Allows JavaScript access and modification
+        key="session_token",
+        value=session_token,
+        httponly=True,
+        secure=False,
+        samesite="lax"
     )
     
-    return {"message": "Login successful", "username": user.name}
+    return {"message": "Login successful", "user_id": user.id, "username": user.name}
 
 
 @app.get("/main_page", response_class=HTMLResponse)
-async def main_page(username: Optional[str] = Cookie(None), is_admin: Optional[str] = Cookie(None)):
-    if not username:
-        return RedirectResponse(url="/")
-    
+async def main_page(current_user: models.user = Depends(get_current_user)):
     admin_link = ""
-    # Check for both "True" and "true" to handle manual cookie manipulation
-    if is_admin and is_admin.lower() == "true":
+    if current_user.is_admin:
         admin_link = '<a href="/admin_panel" style="display: inline-block; margin-top: 20px; padding: 10px 20px; background: #4CAF50; color: white; text-decoration: none; border-radius: 5px;">Go to Admin Panel</a>'
+    
+    # FIXED: No exploit section - endpoint is secure
+    security_info = f"""
+        <div class="security-info">
+            <h3>✅ Security Fixed</h3>
+            <p>The /update_user endpoint now requires:</p>
+            <ul style="text-align: left; display: inline-block;">
+                <li>User must be authenticated</li>
+                <li>Only admins can modify user roles</li>
+                <li>Regular users cannot escalate privileges</li>
+            </ul>
+            <p style="margin-top: 10px;">Try the exploit button - it will fail!</p>
+        </div>
+    """
     
     html_content = f"""
     <!DOCTYPE html>
@@ -194,7 +236,7 @@ async def main_page(username: Optional[str] = Cookie(None), is_admin: Optional[s
     <head>
         <meta charset="UTF-8">
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title>Main Page</title>
+        <title>Main Page - Fixed</title>
         <style>
             body {{
                 font-family: Arial, sans-serif;
@@ -204,6 +246,7 @@ async def main_page(username: Optional[str] = Cookie(None), is_admin: Optional[s
                 min-height: 100vh;
                 margin: 0;
                 background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+                padding: 20px;
             }}
             .container {{
                 background: white;
@@ -211,10 +254,14 @@ async def main_page(username: Optional[str] = Cookie(None), is_admin: Optional[s
                 border-radius: 10px;
                 box-shadow: 0 10px 25px rgba(0,0,0,0.2);
                 text-align: center;
+                max-width: 800px;
             }}
             h1 {{
                 color: #333;
                 margin: 0 0 20px 0;
+            }}
+            h3 {{
+                color: #28a745;
             }}
             p {{
                 color: #666;
@@ -226,15 +273,12 @@ async def main_page(username: Optional[str] = Cookie(None), is_admin: Optional[s
                 border-radius: 5px;
                 margin: 20px 0;
             }}
-            .cookie-info {{
-                background: #fff3cd;
-                padding: 15px;
+            .security-info {{
+                background: #d4edda;
+                padding: 20px;
                 border-radius: 5px;
                 margin: 20px 0;
-                border: 1px solid #ffc107;
-            }}
-            .cookie-info strong {{
-                color: #856404;
+                border: 2px solid #28a745;
             }}
             .logout {{
                 margin-top: 20px;
@@ -243,102 +287,141 @@ async def main_page(username: Optional[str] = Cookie(None), is_admin: Optional[s
                 color: #dc3545;
                 text-decoration: none;
             }}
+            button {{
+                background: #6c757d;
+                color: white;
+                padding: 12px 24px;
+                border: none;
+                border-radius: 5px;
+                cursor: not-allowed;
+                font-size: 16px;
+                margin: 10px 0;
+                opacity: 0.6;
+            }}
+            .result {{
+                margin-top: 10px;
+                display: none;
+            }}
         </style>
     </head>
     <body>
         <div class="container">
             <h1>🎉 Welcome to the Main Page</h1>
             <div class="user-info">
-                <p><strong>Logged in as:</strong> {username}</p>
-                <p><strong>Admin Status:</strong> <span id="adminStatus">{is_admin}</span></p>
+                <p><strong>Logged in as:</strong> {current_user.name}</p>
+                <p><strong>User ID:</strong> {current_user.id}</p>
+                <p><strong>Admin Status:</strong> <span id="adminStatus">{current_user.is_admin}</span></p>
             </div>
-            <div class="cookie-info">
-                <strong>🔍 Tip:</strong> Open Developer Tools (F12) → Application/Storage → Cookies<br>
-                Try changing the <code>is_admin</code> cookie value!
-            </div>
+            {security_info}
+            <button id="exploitBtn">Try Exploit (Will Fail)</button>
+            <div id="exploitResult" class="result"></div>
             {admin_link}
             <div class="logout">
                 <a href="/logout">Logout</a>
             </div>
         </div>
+        <script>
+            const exploitBtn = document.getElementById('exploitBtn');
+            exploitBtn.addEventListener('click', async () => {{
+                const resultDiv = document.getElementById('exploitResult');
+                try {{
+                    const response = await fetch('/update_user', {{
+                        method: 'POST',
+                        headers: {{
+                            'Content-Type': 'application/json',
+                        }},
+                        body: JSON.stringify({{
+                            user_id: {current_user.id},
+                            is_admin: true
+                        }})
+                    }});
+                    
+                    if (response.ok) {{
+                        resultDiv.innerHTML = '<p style="color: red;">❌ This should not happen!</p>';
+                        resultDiv.style.display = 'block';
+                    }} else {{
+                        const data = await response.json();
+                        resultDiv.innerHTML = '<p style="color: green;">✅ Blocked! ' + data.detail + '</p>';
+                        resultDiv.style.display = 'block';
+                    }}
+                }} catch (error) {{
+                    resultDiv.innerHTML = '<p style="color: green;">✅ Request blocked!</p>';
+                    resultDiv.style.display = 'block';
+                }}
+            }});
+        </script>
     </body>
     </html>
     """
     return html_content
 
 
+# FIXED ENDPOINT: Proper authorization checks!
+@app.post("/update_user")
+async def update_user(
+    update_req: UpdateUserRequest, 
+    current_user: models.user = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    # FIXED: Check if the requester is an admin
+    if not current_user.is_admin:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only administrators can modify user privileges"
+        )
+    
+    # FIXED: Additional check - prevent admins from removing their own admin status
+    if update_req.user_id == current_user.id and not update_req.is_admin:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Cannot remove your own admin privileges"
+        )
+    
+    user = db.query(models.user).filter(models.user.id == update_req.user_id).first()
+    
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="User not found"
+        )
+    
+    # Now it's safe to update
+    user.is_admin = update_req.is_admin
+    db.commit()
+    db.refresh(user)
+    
+    return {
+        "message": "User updated successfully",
+        "user_id": user.id,
+        "username": user.name,
+        "is_admin": user.is_admin
+    }
+
+
 @app.get("/logout")
-async def logout(response: Response):
+async def logout(response: Response, session_token: Optional[str] = Cookie(None)):
+    if session_token and session_token in active_sessions:
+        del active_sessions[session_token]
+    
     response = RedirectResponse(url="/")
-    response.delete_cookie("username")
-    response.delete_cookie("is_admin")
+    response.delete_cookie("session_token")
     return response
 
 
 @app.get("/admin_panel", response_class=HTMLResponse)
-async def admin_panel(username: Optional[str] = Cookie(None), is_admin: Optional[str] = Cookie(None)):
-    # VULNERABLE: Only checking cookie value, not database
-    if not username:
-        return RedirectResponse(url="/")
-    
-    # Check for both "True" and "true" to handle manual cookie manipulation
-    if not is_admin or is_admin.lower() != "true":
-        return HTMLResponse(
-            content="""
-            <!DOCTYPE html>
-            <html>
-            <head>
-                <title>Access Denied</title>
-                <style>
-                    body {
-                        font-family: Arial, sans-serif;
-                        display: flex;
-                        justify-content: center;
-                        align-items: center;
-                        min-height: 100vh;
-                        margin: 0;
-                        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-                    }
-                    .container {
-                        background: white;
-                        padding: 40px;
-                        border-radius: 10px;
-                        box-shadow: 0 10px 25px rgba(0,0,0,0.2);
-                        text-align: center;
-                    }
-                    h1 { color: #dc3545; }
-                    p { color: #666; }
-                    a {
-                        display: inline-block;
-                        margin-top: 20px;
-                        padding: 10px 20px;
-                        background: #667eea;
-                        color: white;
-                        text-decoration: none;
-                        border-radius: 5px;
-                    }
-                </style>
-            </head>
-            <body>
-                <div class="container">
-                    <h1>🚫 Access Denied</h1>
-                    <p>You need admin privileges to access this page.</p>
-                    <p><em>Hint: Check your cookies...</em></p>
-                    <a href="/main_page">Go Back</a>
-                </div>
-            </body>
-            </html>
-            """,
-            status_code=403
+async def admin_panel(current_user: models.user = Depends(get_current_user)):
+    if not current_user.is_admin:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Admin access required"
         )
     
-    # VULNERABLE: User reached admin panel by manipulating cookie
     return HTMLResponse(
         content=f"""
         <!DOCTYPE html>
         <html>
         <head>
-            <title>Admin Panel</title>
+            <title>Admin Panel - Fixed</title>
             <style>
                 body {{
                     font-family: Arial, sans-serif;
@@ -378,12 +461,16 @@ async def admin_panel(username: Optional[str] = Cookie(None), is_admin: Optional
         </head>
         <body>
             <div class="container">
-                <h1>👑 Admin Panel</h1>
+                <h1>👑 Admin Panel (Fixed)</h1>
                 <div class="admin-info">
-                    <p><strong>Welcome, {username}!</strong></p>
+                    <p><strong>Welcome, {current_user.name}!</strong></p>
                     <p>You have successfully accessed the admin panel!</p>
-                    <p style="margin-top: 15px; font-size: 14px; color: #856404; background: #fff3cd; padding: 10px; border-radius: 5px;">
-                        not the actual database. Anyone can change their cookie to gain access!
+                    <p style="margin-top: 15px; font-size: 14px;">
+                        ✅ <strong>Security Fixes Applied:</strong><br><br>
+                        • Authentication required<br>
+                        • Authorization checks enforced<br>
+                        • Only admins can modify user privileges<br>
+                        • IDOR vulnerability fixed
                     </p>
                 </div>
                 <a href="/main_page">Back to Main Page</a>
@@ -394,34 +481,6 @@ async def admin_panel(username: Optional[str] = Cookie(None), is_admin: Optional
     )
 
 
-
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8000)
-
-
-
-
-    # soloution
-
-    '''
-    
-    
-    @app.post("/login")
-async def login(login_req: LoginRequest, response: Response, db: Session = Depends(get_db)):
-    user = db.query(models.User).filter(models.User.name == login_req.name).first()
-
-    if not user or user.password != login_req.password:
-        raise HTTPException(status_code=401, detail="Invalid credentials")
-
-    response.set_cookie(
-        key="username",
-        value=user.name,
-        httponly=True  # FIX
-    )
-
-    return {"message": "Login successful"}
-
-    
-    
-    '''

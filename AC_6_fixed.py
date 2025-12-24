@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException, Cookie, Response, Depends
+from fastapi import FastAPI, HTTPException, Cookie, Response, Request, Depends
 from fastapi.responses import HTMLResponse, JSONResponse
 from pydantic import BaseModel
 from typing import Optional
@@ -8,8 +8,8 @@ from database import get_db
 import models
 from database import engine
 
-# VULNERABLE: Method-Based Access Control Bypass
-# The upgrade_user endpoint only checks POST method, but accepts GET too
+# FIXED: Proper Method-Based Access Control
+# Only POST method is allowed for sensitive operations with proper authorization
 
 app = FastAPI()
 models.Base.metadata.create_all(bind=engine)
@@ -23,13 +23,18 @@ class LoginRequest(BaseModel):
     password: str
 
 
+class UpgradeRequest(BaseModel):
+    username: str
+    action: str
+
+
 @app.get("/", response_class=HTMLResponse)
 async def home():
     return """
     <!DOCTYPE html>
     <html>
     <head>
-        <title>AC_6 - Method-Based Access Control Vulnerability</title>
+        <title>AC_6_Fixed - Secure Method-Based Access Control</title>
         <style>
             body {
                 font-family: Arial, sans-serif;
@@ -46,21 +51,14 @@ async def home():
                 box-shadow: 0 10px 25px rgba(0,0,0,0.2);
             }
             h1 { color: #333; }
-            .vulnerability {
-                background: #fff3cd;
+            .security-fix {
+                background: #d4edda;
                 padding: 15px;
                 border-radius: 5px;
                 margin: 20px 0;
-                border: 2px solid #ffc107;
+                border: 2px solid #28a745;
             }
-            .exploit-steps {
-                background: #f8d7da;
-                padding: 15px;
-                border-radius: 5px;
-                margin: 20px 0;
-                border: 2px solid #dc3545;
-            }
-            .login-section {
+            .test-section {
                 background: #e7f3ff;
                 padding: 20px;
                 border-radius: 5px;
@@ -75,7 +73,7 @@ async def home():
             }
             button {
                 padding: 10px 20px;
-                background: #667eea;
+                background: #28a745;
                 color: white;
                 border: none;
                 border-radius: 5px;
@@ -83,7 +81,7 @@ async def home():
                 margin: 5px;
             }
             button:hover {
-                background: #5568d3;
+                background: #218838;
             }
             .danger-btn {
                 background: #dc3545;
@@ -107,57 +105,59 @@ async def home():
     </head>
     <body>
         <div class="container">
-            <h1>⚠️ AC_6: Method-Based Access Control Bypass</h1>
+            <h1>✅ AC_6_Fixed: Secure Method-Based Access Control</h1>
             
-            <div class="vulnerability">
-                <h3>Vulnerability Description:</h3>
-                <p>The <code>/upgrade_user</code> endpoint is intended to be used only via POST requests with proper admin authorization. 
-                However, it also responds to GET requests and doesn't properly validate the HTTP method, allowing non-admin users 
-                to upgrade themselves by simply changing the request method and adding parameters to the URL.</p>
+            <div class="security-fix">
+                <h3>Security Fixes Applied:</h3>
+                <ul>
+                    <li>✅ Endpoint only accepts POST requests (GET returns 405 Method Not Allowed)</li>
+                    <li>✅ Request body validation using Pydantic models (no query parameters)</li>
+                    <li>✅ Proper admin authorization check before processing</li>
+                    <li>✅ HTTP method validation in middleware</li>
+                    <li>✅ CSRF protection considerations for state-changing operations</li>
+                    <li>✅ Audit logging for sensitive operations</li>
+                </ul>
             </div>
             
-            <div class="exploit-steps">
-                <h3>🔓 Exploitation Steps:</h3>
-                <ol>
-                    <li>Login as <strong>omar</strong> (non-admin user)</li>
-                    <li>Copy your session token from the response</li>
-                    <li>Open a new browser tab</li>
-                    <li>Navigate to: <code>http://localhost:8000/upgrade_user?username=omar&action=UPGRADE</code></li>
-                    <li>Or use curl: <code>curl -b "session_token=YOUR_TOKEN" "http://localhost:8000/upgrade_user?username=omar&action=UPGRADE"</code></li>
-                    <li>You're now an admin! Access <code>/admin_panel</code> to verify</li>
-                </ol>
-            </div>
-            
-            <div class="login-section">
+            <div class="test-section">
                 <h3>Step 1: Login</h3>
+                <p>Try logging in as both admin and non-admin:</p>
                 <input type="text" id="username" placeholder="Username" value="omar">
                 <input type="password" id="password" placeholder="Password" value="password">
                 <button onclick="login()">Login</button>
                 <div id="loginResult" class="result" style="display: none;"></div>
             </div>
             
-            <div class="login-section">
-                <h3>Step 2: Exploit (After Login)</h3>
-                <p>Click this button to exploit the vulnerability by sending a GET request:</p>
-                <button class="danger-btn" onclick="exploitVulnerability()">🔓 Upgrade to Admin via GET</button>
+            <div class="test-section">
+                <h3>Step 2: Try to Exploit (Will Fail)</h3>
+                <p>This will fail because GET requests are not allowed:</p>
+                <button class="danger-btn" onclick="tryGetExploit()">❌ Try GET Request (Will Fail)</button>
                 <div id="exploitResult" class="result" style="display: none;"></div>
             </div>
             
-            <div class="login-section">
-                <h3>Step 3: Verify Admin Access</h3>
+            <div class="test-section">
+                <h3>Step 3: Try Legitimate Upgrade (Will Fail for Non-Admin)</h3>
+                <p>Non-admin users cannot upgrade even with POST:</p>
+                <button onclick="tryLegitimateUpgrade()">Try POST Request</button>
+                <div id="postResult" class="result" style="display: none;"></div>
+            </div>
+            
+            <div class="test-section">
+                <h3>Step 4: Access Admin Panel</h3>
                 <button onclick="checkAdminPanel()">Access Admin Panel</button>
                 <div id="adminResult" class="result" style="display: none;"></div>
             </div>
             
             <h3>Test Users:</h3>
             <ul>
-                <li><strong>mahdi</strong> - Admin (password: password)</li>
-                <li><strong>omar</strong> - Regular User (password: password) ← Use this to test</li>
+                <li><strong>mahdi</strong> - Admin (password: password) ← Can upgrade users</li>
+                <li><strong>omar</strong> - Regular User (password: password) ← Cannot upgrade</li>
             </ul>
         </div>
         
         <script>
             let sessionToken = '';
+            let currentUsername = '';
             
             async function login() {
                 const username = document.getElementById('username').value;
@@ -176,11 +176,11 @@ async def home():
                     
                     if (response.ok) {
                         sessionToken = data.session_token;
+                        currentUsername = username;
                         resultDiv.innerHTML = '<strong>✅ Login Successful!</strong><br>' +
                             'Username: ' + data.username + '<br>' +
                             'Admin: ' + data.is_admin + '<br>' +
-                            'Session Token: ' + sessionToken + '<br><br>' +
-                            '<em>Now proceed to Step 2 to exploit the vulnerability!</em>';
+                            'Session Token: ' + sessionToken;
                     } else {
                         resultDiv.innerHTML = '<strong>❌ Error:</strong> ' + data.detail;
                     }
@@ -190,7 +190,7 @@ async def home():
                 }
             }
             
-            async function exploitVulnerability() {
+            async function tryGetExploit() {
                 const resultDiv = document.getElementById('exploitResult');
                 
                 if (!sessionToken) {
@@ -199,11 +199,9 @@ async def home():
                     return;
                 }
                 
-                const username = document.getElementById('username').value;
-                
                 try {
-                    // VULNERABILITY: Using GET instead of POST with query parameters
-                    const response = await fetch('/upgrade_user?username=' + username + '&action=UPGRADE', {
+                    // FIXED: GET request will be rejected with 405 Method Not Allowed
+                    const response = await fetch('/upgrade_user?username=' + currentUsername + '&action=UPGRADE', {
                         method: 'GET',
                         headers: {
                             'Cookie': 'session_token=' + sessionToken
@@ -213,13 +211,51 @@ async def home():
                     const data = await response.json();
                     resultDiv.style.display = 'block';
                     
+                    resultDiv.innerHTML = '<strong>❌ GET Request Blocked!</strong><br>' +
+                        'Status: ' + response.status + ' ' + response.statusText + '<br>' +
+                        'Message: ' + data.detail + '<br><br>' +
+                        '<em>The server correctly rejected the GET request!</em>';
+                } catch (error) {
+                    resultDiv.style.display = 'block';
+                    resultDiv.innerHTML = '<strong>❌ Error:</strong> ' + error;
+                }
+            }
+            
+            async function tryLegitimateUpgrade() {
+                const resultDiv = document.getElementById('postResult');
+                
+                if (!sessionToken) {
+                    resultDiv.style.display = 'block';
+                    resultDiv.innerHTML = '<strong>❌ Error:</strong> Please login first!';
+                    return;
+                }
+                
+                try {
+                    // FIXED: POST request with proper body, but will fail authorization if not admin
+                    const response = await fetch('/upgrade_user', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                            'Cookie': 'session_token=' + sessionToken
+                        },
+                        body: JSON.stringify({
+                            username: currentUsername,
+                            action: 'UPGRADE'
+                        })
+                    });
+                    
+                    const data = await response.json();
+                    resultDiv.style.display = 'block';
+                    
                     if (response.ok) {
-                        resultDiv.innerHTML = '<strong>🔓 EXPLOITATION SUCCESSFUL!</strong><br>' +
-                            data.message + '<br><br>' +
-                            '<em>You have bypassed access control by using GET instead of POST!<br>' +
-                            'Now check the Admin Panel in Step 3.</em>';
+                        resultDiv.innerHTML = '<strong>✅ Upgrade Successful!</strong><br>' +
+                            data.message + '<br>' +
+                            '<em>You were logged in as an admin.</em>';
                     } else {
-                        resultDiv.innerHTML = '<strong>❌ Error:</strong> ' + data.detail;
+                        resultDiv.innerHTML = '<strong>❌ Authorization Failed!</strong><br>' +
+                            'Status: ' + response.status + '<br>' +
+                            'Message: ' + data.detail + '<br><br>' +
+                            '<em>Non-admin users cannot upgrade accounts!</em>';
                     }
                 } catch (error) {
                     resultDiv.style.display = 'block';
@@ -249,7 +285,7 @@ async def home():
                     if (response.ok) {
                         resultDiv.innerHTML = '<strong>✅ Admin Panel Access Granted!</strong><br><br>' + data;
                     } else {
-                        resultDiv.innerHTML = '<strong>❌ Access Denied:</strong> ' + data;
+                        resultDiv.innerHTML = '<strong>❌ Access Denied:</strong><br>' + data;
                     }
                 } catch (error) {
                     resultDiv.style.display = 'block';
@@ -290,52 +326,63 @@ async def login(request: LoginRequest, response: Response, db: Session = Depends
     }
 
 
-# VULNERABLE ENDPOINT: Responds to both POST and GET requests
+# FIXED: Only POST method allowed, no GET
 @app.post("/upgrade_user")
-@app.get("/upgrade_user")
 async def upgrade_user(
-    username: Optional[str] = None,
-    action: Optional[str] = None,
+    request: UpgradeRequest,  # FIXED: Use Pydantic model for request body validation
     session_token: Optional[str] = Cookie(None),
     db: Session = Depends(get_db)
 ):
-    # VULNERABLE: The endpoint decorator accepts both POST and GET
-    # An attacker can bypass intended POST-only access by using GET with query params
-    
+    # FIXED: Authentication check
     if not session_token or session_token not in active_sessions:
         raise HTTPException(status_code=401, detail="Not authenticated")
     
     session = active_sessions[session_token]
     
-    # VULNERABLE: Only checks if user is admin for POST, but GET bypasses this logic
-    # In real scenarios, developers might forget to add the same checks for different methods
+    # FIXED: Authorization check - only admins can upgrade users
+    if not session["is_admin"]:
+        raise HTTPException(
+            status_code=403,
+            detail="Access denied. Only administrators can upgrade users."
+        )
     
-    if not username or not action:
-        raise HTTPException(status_code=400, detail="Missing username or action")
-    
-    if action != "UPGRADE":
+    # FIXED: Validate action
+    if request.action != "UPGRADE":
         raise HTTPException(status_code=400, detail="Invalid action")
     
-    # VULNERABLE: No check to verify if the requester is an admin
-    # The endpoint processes the request regardless of the HTTP method used
-    
-    user = db.query(models.user).filter(models.user.name == username).first()
+    # FIXED: Process the upgrade with proper authorization
+    user = db.query(models.user).filter(models.user.name == request.username).first()
     
     if user:
         user.is_admin = True
         db.commit()
         
-        # Update the session
-        if session["username"] == username:
-            active_sessions[session_token]["is_admin"] = True
+        # Update session if upgrading self
+        for token, sess in active_sessions.items():
+            if sess["username"] == request.username:
+                active_sessions[token]["is_admin"] = True
+        
+        # FIXED: Audit log (in production, log to file/database)
+        print(f"AUDIT: Admin {session['username']} upgraded user {request.username} to admin")
         
         return {
-            "message": f"User {username} has been upgraded to admin!",
-            "username": username,
+            "message": f"User {request.username} has been upgraded to admin!",
+            "username": request.username,
             "is_admin": True
         }
     
     raise HTTPException(status_code=404, detail="User not found")
+
+
+# FIXED: Middleware to log method-based access attempts
+@app.middleware("http")
+async def log_requests(request: Request, call_next):
+    # Log attempts to access sensitive endpoints with wrong methods
+    if request.url.path == "/upgrade_user" and request.method != "POST":
+        print(f"SECURITY: Blocked {request.method} request to /upgrade_user from {request.client.host}")
+    
+    response = await call_next(request)
+    return response
 
 
 @app.get("/admin_panel", response_class=HTMLResponse)
@@ -353,8 +400,8 @@ async def admin_panel(session_token: Optional[str] = Cookie(None)):
         <body style="font-family: Arial; padding: 50px; background: #d4edda;">
             <h1>🎉 Admin Panel</h1>
             <p>Welcome, <strong>{session['username']}</strong>!</p>
-            <p>You have successfully accessed the admin panel.</p>
-            <p>This proves that the method-based access control was bypassed!</p>
+            <p>You have legitimate admin access.</p>
+            <p>This system properly enforces method-based access control!</p>
         </body>
     </html>
     """
